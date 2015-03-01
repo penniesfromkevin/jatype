@@ -16,6 +16,12 @@ BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE = 640, 480
 DEFAULT_SPEED = 10
 DEFAULT_ENEMIES = 10
 INCREASE_TIME = 5
+DEFAULT_INCREMENT = 20
+GOAL_X = 300
+
+SECTION_MIN = 4
+DIAMETER_MIN = 6
+DIAMETER_MAX = 14
 
 LOG_LEVELS = ('CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG')
 DEFAULT_LOG_LEVEL = LOG_LEVELS[3]
@@ -68,7 +74,10 @@ class ImageStore(object):
         image_path = os.path.join(self._path, '%s.%s' % (name, self._ext))
         try:
             image_object = pygame.image.load(image_path).convert_alpha()
-        except:
+        except pygame.error:
+            LOGGER.error('Could not load image %s', image_path)
+            #font = pygame.font.Font(None, 48)
+            #image_object = font.render('X', True, (255, 0, 0))
             image_object = None
         self._store[name] = image_object
         return image_object
@@ -80,8 +89,8 @@ class Character(pygame.sprite.Sprite):
     def __init__(self, kind, board, x_pos=0, y_pos=0):
         """Initialize character.
         """
-        super(Character, self).__init__()
-        #pygame.sprite.Sprite.__init__(self)
+        #super(Character, self).__init__()
+        pygame.sprite.Sprite.__init__(self)
 
         self.kind = kind
         self.board = board
@@ -97,8 +106,8 @@ class Character(pygame.sprite.Sprite):
         self.rect.x = self.x_pos = x_pos
         self.rect.y = self.y_pos = y_pos
 
-        self.x_inc = 0
-        self.y_inc = 0
+        self.speed_x = 0
+        self.speed_y = 0
 
     def display(self, x_pos=None, y_pos=None):
         """Display the character.
@@ -112,11 +121,11 @@ class Character(pygame.sprite.Sprite):
     def update(self):
         """Update sprite.
         """
-        self.x_pos += self.x_inc
-        self.y_pos += self.y_inc
+        self.x_pos += self.speed_x
+        self.y_pos += self.speed_y
         self.rect.x = self.x_pos
         self.rect.y = self.y_pos
-        self.display()
+        #self.display()
 
 
 class Enemy(Character):
@@ -124,13 +133,17 @@ class Enemy(Character):
     """
     def __init__(self, kind, board):
         """Initialize Enemy.
+
+        Args:
+            kind: image type to use.
+            board: PyGame display surface.
         """
         board_x, board_y = board.get_size()
         x_pos = random.randint(0, board_x) + board_x
         image = 'enemy/%s' % kind
         super(Enemy, self).__init__(image, board, x_pos)
-        self.speed = DEFAULT_SPEED
-        self.x_inc = -self.speed
+        self.speed = random.randint(2, DEFAULT_SPEED * 2)
+        self.speed_x = -self.speed
         y_max = board_y - self.height
         self.y_pos = random.randint(0, y_max)
 
@@ -143,8 +156,9 @@ class Player(Character):
         """
         image = 'player/%s' % kind
         super(Player, self).__init__(image, board, x_pos, y_pos)
-        self.y_inc = self.speed
+        self.speed_y = DEFAULT_SPEED #self.speed
         self.mirror = False
+        self.guided = False
 
     def get_input(self):
         """Get user input.
@@ -162,34 +176,41 @@ class Player(Character):
                     return_value = 'quit'
                 elif event.key == pygame.K_p:
                     return_value = 'pause'
+
                 elif event.key == pygame.K_SPACE:
-                    self.y_inc = -self.speed
-                elif event.key == pygame.K_z:
+                    self.speed_y = -self.speed
+
+                elif event.key == pygame.K_e:
+                    ARGS.enemies = not ARGS.enemies
+                elif event.key == pygame.K_t:
+                    ARGS.tube = not ARGS.tube
+                elif event.key == pygame.K_i:
+                    ARGS.infinite = not ARGS.infinite
+
+                elif event.key == pygame.K_m:
                     self.mirror = not self.mirror
+                elif event.key == pygame.K_g:
+                    self.guided = not self.guided
+                elif event.key == pygame.K_0:
+                    self.speed_y = 0
             elif event.type == pygame.KEYUP:
-                if event.key in (pygame.K_RIGHT, pygame.K_LEFT):
-                    self.x_inc = 0
-                elif event.key in (pygame.K_UP, pygame.K_DOWN):
-                    self.y_inc = 0
-                elif event.key in (pygame.K_SPACE,):
-                    self.y_inc = self.speed
+                if event.key in (pygame.K_SPACE,):
+                    self.speed_y = self.speed
         return return_value
 
     def update(self):
         """Update player.
         """
-        if self.x_pos + self.x_inc > BOARD_WIDTH - self.width:
+        if self.x_pos + self.speed_x > BOARD_WIDTH - self.width:
             self.x_pos = BOARD_WIDTH - self.width
-            self.x_inc = 0
-        elif self.x_pos + self.x_inc < 0:
+            self.speed_x = 0
+        elif self.x_pos + self.speed_x < 0:
             self.x_pos = 0
-            self.x_inc = 0
-        if self.y_pos + self.y_inc > BOARD_HEIGHT - self.height:
-            self.y_pos = BOARD_HEIGHT - self.height
-            self.y_inc = 0
-        elif self.y_pos + self.y_inc < 0:
-            self.y_pos = 0
-            self.y_inc = 0
+            self.speed_x = 0
+        if self.y_pos + self.speed_y > BOARD_HEIGHT - self.height:
+            self.y_pos = BOARD_HEIGHT - self.height - self.speed_y
+        elif self.y_pos + self.speed_y < 0:
+            self.y_pos = self.speed
         super(Player, self).update()
         if self.mirror:
             half_board = self.board.get_height() / 2
@@ -197,51 +218,184 @@ class Player(Character):
             self.display(y_pos=mirror_y)
 
 
+class Block(Character):
+    """Block.
+    """
+    def __init__(self, kind, board, x_pos=0, y_pos=0, speed=0):
+        """Put a block on a grid.
+
+        Args:
+            kind: image type to use.
+            board: PyGame display surface.
+            x_pos: X location.
+            y_pos: Y location.
+        """
+        image = 'block/%s' % kind
+        super(Block, self).__init__(image, board, x_pos, y_pos)
+        self.speed_x = speed
+
+
+class BlockTube(object):
+    """The tube that serves as the game track.
+    """
+    def __init__(self, kind, board, speed=0):
+        """Set up how the tube 'moves'.
+        """
+        self.blocks_top = pygame.sprite.Group()
+        self.blocks_bottom = pygame.sprite.Group()
+
+        self.board = board
+        self.board_width, self.board_height = self.board.get_size()
+
+        self.kind = kind
+        block = Block(self.kind, self.board, self.board_width)
+        self.block_width = block.width
+        self.block_height = block.height
+
+        self.grid_width = self.board_width // self.block_width
+        self.grid_height = (self.board_height // self.block_height)
+
+        self.diameter = DIAMETER_MAX
+        self.grid_x = self.grid_width
+        self.grid_y = self.get_grid_y_max()
+
+        self._section_length = SECTION_MIN
+        self._speed = speed
+        self._x_pos, _ = self.grid_to_display(self.grid_width, 0)
+        self._delta_y = 0
+
+    def get_grid_y_max(self):
+        """Get maximum grid Y for a given specification.
+        """
+        grid_y_max = self.grid_height - self.diameter - 2
+        return grid_y_max
+
+    def get_y_at_x(self, x_pos):
+        """Gets the y_position of the tube at a given x-position.
+
+        Args:
+            x_pos: X-position for which to get the y-position.
+
+        Returns:
+            Y-position, as display coordinate.
+        """
+        tube_y = None
+        for block in self.blocks_top:
+            if x_pos >= block.x_pos and x_pos <= block.x_pos + block.width:
+                tube_y = block.y_pos + block.height
+        return tube_y
+
+    def grid_to_display(self, grid_x, grid_y):
+        """Converts from grid-coordinates to display coordinates.
+
+        Args:
+            grid_x: X location on grid.
+            grid_y: Y location on grid.
+
+        Returns:
+            Tuple: (display_x, display_y)
+        """
+        x_pos = int(grid_x * self.block_width)
+        y_pos = int(grid_y * self.block_height)
+        return x_pos, y_pos
+
+    def add_section(self):
+        """Adds a one-block section of the tube.
+
+        Args:
+            kind: Image type to use for the section.
+        """
+        x_pos, y_pos = self.grid_to_display(self.grid_width, self.grid_y)
+        new_block = Block(self.kind, self.board, x_pos, y_pos, self._speed)
+        self.blocks_top.add(new_block)
+        grid_y_side = int(self.grid_y + self.diameter + 1)
+        x_end, y_end = self.grid_to_display(self.grid_width, grid_y_side)
+        new_block = Block(self.kind, self.board, x_end, y_end, self._speed)
+        self.blocks_bottom.add(new_block)
+
+    def update(self):
+        """Update tube movement.
+        """
+        self._x_pos += self._speed
+        if self._x_pos < self.board_width - self.block_width:
+            self._x_pos += self.block_width
+            if self._section_length:
+                self._section_length -= 1
+                if self._delta_y:
+                    grid_y = self.grid_y + self._delta_y
+                    grid_y_max = self.get_grid_y_max()
+                    if grid_y < 0:
+                        grid_y = 0
+                    elif grid_y > grid_y_max:
+                        grid_y = grid_y_max
+                    self.grid_y = grid_y
+                else:
+                    # only change diameter if Y has not changed
+                    delta_d = random.choice([-1, 0, 1])
+                    diameter = self.diameter + delta_d
+                    if diameter < DIAMETER_MIN:
+                        diameter = DIAMETER_MIN
+                    elif diameter > DIAMETER_MAX:
+                        diameter = DIAMETER_MAX
+                    if self.grid_y + diameter + 2 <= self.grid_height:
+                        self.diameter = diameter
+            else:
+                self._section_length = SECTION_MIN
+                self._delta_y = random.choice([-1, -1, 0, 1, 1])
+            self.add_section()
+
+        for block_group in (self.blocks_top, self.blocks_bottom):
+            block_group.update()
+            for block in block_group:
+                if block.x_pos < -self.block_width:
+                    block_group.remove(block)
+
+
 class Background(object):
     """Backgrounds.  Yes, plural.
     """
-    def __init__(self, levels, board, x_inc=0, y_inc=0):
+    def __init__(self, layers, board, speed_x=0, speed_y=0):
         """Initialize scrolling background object.
 
         Args:
-            levels: A single background name, or list of backgrounds.
+            layers: A list of background names.
         """
         self.board = board
-        if not isinstance(levels, (list, tuple)):
-            levels = [levels]
-        self.levels = []
-        for incr, level in enumerate(levels):
-            image = 'background/%s' % level
-            background = Character(image, self.board, 0, 0)
-            background.display()
-            background.x_inc = x_inc + int(x_inc * (incr + 1) / len(levels))
-            background.y_inc = y_inc + int(y_inc * (incr + 1) / len(levels))
-            LOGGER.debug('x: %d, y: %d', background.x_inc, background.y_inc)
-            self.levels.append(background)
+        if not isinstance(layers, (list, tuple)):
+            layers = [layers]
+        self.layers = pygame.sprite.Group()
+        for incr, layer_name in enumerate(layers):
+            image = 'background/%s' % layer_name
+            layer = Character(image, self.board, 0, 0)
+            layer.speed_x = speed_x + int(speed_x * (incr + 1) / len(layers))
+            layer.speed_y = speed_y + int(speed_y * (incr + 1) / len(layers))
+            LOGGER.debug('x: %d, y: %d', layer.speed_x, layer.speed_y)
+            self.layers.add(layer)
 
     def update(self):
         """Update backgrounds.
         """
-        for level in self.levels:
-            if level.x_pos <= -level.width or level.x_pos >= level.width:
-                level.x_pos = 0
-            if level.y_pos <= -level.height or level.y_pos >= level.height:
-                level.y_pos = 0
+        for layer in self.layers:
+            if layer.x_pos <= -layer.width or layer.x_pos >= layer.width:
+                layer.x_pos = 0
+            if layer.y_pos <= -layer.height or layer.y_pos >= layer.height:
+                layer.y_pos = 0
 
-            if level.x_inc:
-                self.board.blit(level.image,
-                        (level.x_pos - cmp(level.x_inc, 0) * level.width,
-                         level.y_pos))
-            if level.y_inc:
-                self.board.blit(level.image,
-                        (level.x_pos,
-                         level.y_pos - cmp(level.y_inc, 0) * level.height))
+            if layer.speed_x:
+                self.board.blit(layer.image,
+                        (layer.x_pos - cmp(layer.speed_x, 0) * layer.width,
+                         layer.y_pos))
+            if layer.speed_y:
+                self.board.blit(layer.image,
+                        (layer.x_pos,
+                         layer.y_pos - cmp(layer.speed_y, 0) * layer.height))
                 # If movement is diagonal, a fourth copy is required
-                if level.x_inc:
-                    self.board.blit(level.image,
-                            (level.x_pos - cmp(level.x_inc, 0) * level.width,
-                             level.y_pos - cmp(level.y_inc, 0) * level.height))
-            level.update()
+                if layer.speed_x:
+                    self.board.blit(layer.image,
+                            (layer.x_pos - cmp(layer.speed_x, 0) * layer.width,
+                            layer.y_pos - cmp(layer.speed_y, 0) * layer.height))
+        self.layers.update()
+        self.layers.draw(self.board)
 
 
 def parse_args():
@@ -252,8 +406,12 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(
             description='Test basic Kphue functionality.')
+    parser.add_argument('-e', '--enemies', action='store_true',
+            help='Enable enemies.')
+    parser.add_argument('-t', '--tube', action='store_true',
+            help='Enable tube.')
     parser.add_argument('-i', '--infinite', action='store_true',
-            help='Enable infinite.')
+            help='Enable infinite mode (no dying).')
 
     parser.add_argument('-k', '--kphue', action='store_true',
             help='Enable kphue.')
@@ -266,6 +424,21 @@ def parse_args():
             default=DEFAULT_LOG_LEVEL, help='Set the logging level.')
     args = parser.parse_args()
     return args
+
+
+def pause_game(pause=500):
+    """Pause the game.
+
+    Args:
+        pause: Time, in milliseconds.
+    """
+    paused = True
+    while paused:
+        pygame.time.delay(pause)
+        for event in pygame.event.get():
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_p:
+                    paused = False
 
 
 def set_orb(orb, param, value):
@@ -288,43 +461,80 @@ def main():
     #pygame.mixer.music.load('Track1.mp3')
     #pygame.mixer.music.play()
 
-    backdrop = Background(('far', 'near'), BOARD, -6)
+    backdrop = Background(('far', 'near'), BOARD, -4)
     y_half = BOARD_HEIGHT / 2
-    player = Player('default', BOARD, 10, y_half)
+    player = Player('default', BOARD, DEFAULT_INCREMENT * 5, y_half)
+
+    increase_counter = 0
+    enemy_count = DEFAULT_ENEMIES
+    if ARGS.enemies:
+        enemies = pygame.sprite.Group()
+
+    if ARGS.tube:
+        tube = BlockTube('sprite', BOARD, -DEFAULT_SPEED)
 
     game_over = False
-    increase_counter = 0
-    enemies = pygame.sprite.Group()
-    enemy_count = DEFAULT_ENEMIES
     while not game_over:
         BOARD.fill((10, 0, 15))
         backdrop.update()
 
-        if len(enemies) < enemy_count:
-            new_enemy = Enemy('manta', BOARD)
-            enemies.add(new_enemy)
-
         intent = player.get_input()
         player.update()
+        if player.guided and ARGS.tube:
+            tube_y = tube.get_y_at_x(player.x_pos + player.width)
+            if tube_y:
+                player.y_pos = tube_y + tube.block_height * 3
+        player.display()
 
-        enemies_gone = [enemy for enemy in enemies
-                        if enemy.x_pos < -enemy.width]
-        enemies.remove(enemies_gone)
-        enemies.update()
+        if ARGS.enemies:
+            if len(enemies) < enemy_count:
+                new_enemy = Enemy('manta', BOARD)
+                enemies.add(new_enemy)
 
-        enemies_collided = pygame.sprite.spritecollide(player, enemies, True)
-        if enemies_collided:
-            print('Ouch')
-            player.x_pos -= 5
-            increase_counter = 0
+            enemies_gone = [enemy for enemy in enemies
+                            if enemy.x_pos < -enemy.width]
+            enemies.remove(enemies_gone)
+            enemies.update()
+            enemies.draw(BOARD)
+
+            collisions = pygame.sprite.spritecollide(player, enemies, True)
+            if collisions:
+                LOGGER.info('Gack!')
+                player.x_pos -= DEFAULT_INCREMENT // 2
+                increase_counter = 0
+
+        if ARGS.tube:
+            tube.update()
+            collisions = pygame.sprite.spritecollide(player, tube.blocks_top,
+                    False)
+            if collisions:
+                player.y_pos += collisions[0].height
+            else:
+                collisions = pygame.sprite.spritecollide(player,
+                        tube.blocks_bottom, False)
+                if collisions:
+                    player.y_pos -= collisions[0].height
+            if collisions:
+                LOGGER.info('Ouch')
+                player.x_pos -= DEFAULT_INCREMENT // 3
+                increase_counter = 0
+            tube.blocks_top.draw(BOARD)
+            tube.blocks_bottom.draw(BOARD)
 
         increase_counter += 1
         if increase_counter > INCREASE_TIME * FRAME_RATE:
             increase_counter = 0
-            player.x_pos += 5
+            player.x_pos += DEFAULT_INCREMENT
             enemy_count += 1
 
-        if intent:
+        if intent == 'quit':
+            game_over = True
+        elif intent == 'pause':
+            pause_game()
+        if player.x_pos < 0 and not ARGS.infinite:
+            game_over = True
+        elif player.x_pos >= GOAL_X:
+            LOGGER.info('OMG, you did it...')
             game_over = True
 
         CLOCK.tick(FRAME_RATE)
